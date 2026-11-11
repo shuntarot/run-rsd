@@ -67,7 +67,12 @@ module rsd_axi_core (
     output logic [7:0]  serial_data,
 
     // The low word the program last stored to tohost (0x8000_1000)
-    output logic [31:0] tohost
+    output logic [31:0] tohost,
+
+    // Serial input at 0x4000_2004: {seq, char} that a load returns, and the
+    // low byte the program last stored there
+    input  logic [15:0] rx,
+    output logic [7:0]  rx_ack
 );
     import BasicTypes::*;
     import CacheSystemTypes::*;
@@ -144,6 +149,8 @@ module rsd_axi_core (
         .serialWE          (serial_we),
         .serialWriteData   (serial_data),
         .tohost            (tohost),
+        .serialIn          (rx),
+        .serialInAck       (rx_ack),
         .lastCommittedPC   (lastCommittedPC),
         .debugRegister     (debugRegister)
     );

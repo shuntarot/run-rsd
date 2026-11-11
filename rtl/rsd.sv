@@ -1,5 +1,5 @@
 // RSD (1d7415b), Processor/Src with every `include expanded, and
-// patched for tohost (PATCHES in the script).
+// patched for tohost and a serial input (PATCHES in the script).
 // Written by scripts/flatten.py. Do not edit.
 // Copyright 2019- RSD contributors. Apache License 2.0 (LICENSE.RSD).
 `define RSD_SYNTHESIS
@@ -420,6 +420,8 @@ localparam PHY_ADDR_SECTION_1_BASE = 20'h1_0000;
 //
 localparam LOG_ADDR_SERIAL_OUTPUT = 32'h4000_2000;
 localparam PHY_ADDR_SERIAL_OUTPUT = 20'h0_2000;
+localparam LOG_ADDR_SERIAL_INPUT = 32'h4000_2004;
+localparam PHY_ADDR_SERIAL_INPUT = 20'h0_2004;
 localparam LOG_ADDR_TOHOST = 32'h8000_1000;
 localparam PHY_ADDR_TOHOST = 20'h0_3000;
 
@@ -456,6 +458,9 @@ function automatic MemoryMapType GetMemoryMapType(AddrPath addr);
     if (LOG_ADDR_TOHOST <= addr && addr < LOG_ADDR_TOHOST + 8) begin
         return MMT_IO;
     end
+    else if (addr == LOG_ADDR_SERIAL_INPUT) begin
+        return MMT_IO;
+    end
     else if (addr == LOG_ADDR_SERIAL_OUTPUT) begin
         return MMT_IO;
     end
@@ -480,6 +485,10 @@ function automatic PhyAddrPath ToPhyAddrFromLogical(AddrPath logAddr);
     if (LOG_ADDR_TOHOST <= logAddr && logAddr < LOG_ADDR_TOHOST + 8) begin
         phyAddr.isIO = TRUE;
         phyAddr.addr = PHY_ADDR_TOHOST + logAddr[2:0];
+    end
+    else if (logAddr == LOG_ADDR_SERIAL_INPUT) begin
+        phyAddr.isIO = TRUE;
+        phyAddr.addr = PHY_ADDR_SERIAL_INPUT;
     end
     else if (logAddr == LOG_ADDR_SERIAL_OUTPUT) begin
         phyAddr.isIO = TRUE;
@@ -3825,6 +3834,7 @@ input
     MemAccessResponse memAccessResponse, // メモリ書き込み完了通知
     logic memAccessReadBusy,
     logic memAccessWriteBusy,
+    logic [15:0] serialIn,
 output
     DebugRegister debugRegister,
     PC_Path lastCommittedPC,
@@ -3834,7 +3844,8 @@ output
     logic memAccessWE,
     logic serialWE,
     SerialDataPath serialWriteData,
-    DataPath tohost
+    DataPath tohost,
+    logic [7:0] serialInAck
 );
     //
     // --- For Debug
@@ -3904,6 +3915,8 @@ output
     CSR_UnitIF csrUnitIF(clk, rst, rstStart);
     IO_UnitIF ioUnitIF(clk, rst, rstStart, serialWE, serialWriteData);
     assign tohost = ioUnitIF.tohost;
+    assign ioUnitIF.serialIn = serialIn;
+    assign serialInAck = ioUnitIF.serialInAck;
     MulDivUnitIF mulDivUnitIF(clk, rst);
 
     //
@@ -24739,15 +24752,22 @@ module IO_Unit(
 
     // tohost: the low word last stored there
     DataPath tohostReg;
+    // Serial input: the low byte last stored there
+    logic [7:0] serialInAckReg;
     always_ff@(posedge port.clk) begin
         if (port.rst) begin
             tohostReg <= '0;
+            serialInAckReg <= '0;
         end
         else if (port.ioWE && port.ioWriteAddrIn.addr == PHY_ADDR_TOHOST) begin
             tohostReg <= port.ioWriteDataIn;
         end
+        else if (port.ioWE && port.ioWriteAddrIn.addr == PHY_ADDR_SERIAL_INPUT) begin
+            serialInAckReg <= port.ioWriteDataIn[7:0];
+        end
     end
     assign port.tohost = tohostReg;
+    assign port.serialInAck = serialInAckReg;
     always_ff@(posedge port.clk) begin
         if (port.rst) begin
             tmReg <= '0;
@@ -24797,6 +24817,9 @@ module IO_Unit(
         end
         else if (phyRawReadAddr == PHY_ADDR_TOHOST + 4) begin
             port.ioReadDataOut = '0;
+        end
+        else if (phyRawReadAddr == PHY_ADDR_SERIAL_INPUT) begin
+            port.ioReadDataOut = {16'h0, port.serialIn};
         end
         else if (phyRawReadAddr == PHY_ADDR_TIMER_LOW) begin
             port.ioReadDataOut = tmReg.mtime.split.low;
@@ -24856,6 +24879,9 @@ interface IO_UnitIF(
 
     // The low word last stored to tohost
     DataPath tohost;
+    // Serial input: {seq, char} from the host, and the seq taken
+    logic [15:0] serialIn;
+    logic [7:0] serialInAck;
 
     modport IO_Unit(
     input 
@@ -24864,11 +24890,13 @@ interface IO_UnitIF(
         ioWriteDataIn,
         ioWriteAddrIn,
         ioReadAddrIn,
+        serialIn,
     output
         ioReadDataOut,
         serialWE,
         serialWriteDataOut,
-        tohost
+        tohost,
+        serialInAck
     );
 
     modport MemoryAccessStage(

@@ -5,7 +5,8 @@
 //
 // With +isa, it runs another program instead (+hex=<file>: a riscv-tests
 // test, or firmware from apps/) until it writes tohost, and prints
-// "tohost <value>"; "tohost 0" is a timeout.
+// "tohost <value>"; "tohost 0" is a timeout. +rx=<text> types text on the
+// serial input.
 module tb;
     logic clk = 0;
     always #5 clk = ~clk;
@@ -25,6 +26,10 @@ module tb;
     logic        uart_valid;
     logic [7:0]  uart_data;
     logic [31:0] tohost;
+    logic [15:0] rx = 0;
+    logic [7:0]  rx_ack;
+    string       rx_text = "";
+    integer      rx_next = 0;
     logic        isa = 0;
     string       hex = "smoke.hex";
     // riscv-tests runs, in cycles: RSD's reset takes 10000 of them.
@@ -37,8 +42,18 @@ module tb;
     run_rsd_rsd_top dut (
         .i_clk(clk), .i_rst(rst_n),
         .o_uart_valid(uart_valid), .o_uart_data(uart_data), .o_tohost(tohost),
+        .i_rx(rx), .o_rx_ack(rx_ack),
         .mem(axi.master)
     );
+
+    // The host side of the serial input: the next character of +rx=<text>,
+    // with the next seq, once the program has taken the last one.
+    always @(posedge clk) begin
+        if (rx_next < rx_text.len() && rx_ack == rx[15:8]) begin
+            rx <= {rx[15:8] + 8'd1, rx_text[rx_next]};
+            rx_next <= rx_next + 1;
+        end
+    end
 
     always @(posedge clk) begin
         if (uart_valid) begin
@@ -138,6 +153,7 @@ module tb;
         for (i = 0; i < WORDS; i = i + 1) mem[i] = 0;
         isa = $test$plusargs("isa");
         void'($value$plusargs("hex=%s", hex));
+        void'($value$plusargs("rx=%s", rx_text));
         $readmemh(hex, mem);
 
         // What asm/smoke.S writes at 0x8000_2000, word by word. misa and

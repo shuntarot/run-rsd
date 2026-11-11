@@ -23,6 +23,11 @@ include (inline, "rsd_axi.sv");
 /// - `o_tohost` holds the low word last stored to 0x8000_1000, where
 ///   riscv-tests report. That word is an I/O address in this build of RSD
 ///   (scripts/flatten.py), so the store does not wait in the data cache.
+/// - A load from 0x4000_2004 returns `i_rx`, {seq, char}, which the host
+///   sets, and `o_rx_ack` holds the low byte last stored there. The program
+///   takes a character when seq changes and stores that seq; the host gives
+///   the next one after `o_rx_ack` shows it. That address is also an I/O
+///   address in this build of RSD.
 ///
 /// RSD moves whole 8-byte cache lines: every AXI4 transfer is one 64-bit
 /// beat. The boot ROM relies on that. RSD's IDs are 2 bits; the port carries
@@ -35,6 +40,8 @@ module rsd_top (
     o_uart_valid: output logic    ,
     o_uart_data : output logic<8> ,
     o_tohost    : output logic<32>,
+    i_rx        : input  logic<16>,
+    o_rx_ack    : output logic<8> ,
 
     mem: modport $std::axi4_if::<$std::axi4_pkg::<32, 8, 6, 1, 1, 1, 1, 1>>::master,
 ) {
@@ -140,6 +147,8 @@ module rsd_top (
         serial_we  : o_uart_valid,
         serial_data: o_uart_data ,
         tohost     : o_tohost    ,
+        rx         : i_rx        ,
+        rx_ack     : o_rx_ack    ,
     );
 
     /// The boot ROM: the 8-byte line at physical address `addr`.

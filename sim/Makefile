@@ -46,17 +46,18 @@ isa: obj_dir/Vtb
 		else echo "fail $$((r >> 1)) $$n"; fi; \
 	done; echo "passed $$pass/$$total"; [ $$pass = $$total ]
 
-# make -C sim elf ELF=<file>
+# make -C sim elf ELF=<file> [RX=<text>]
 # runs one program, such as firmware from apps/, until it writes tohost, with
-# its serial output.
+# its serial output. RX is typed on its serial input.
 ELF ?=
+RX  ?=
 
 elf: obj_dir/Vtb
 	@test -n "$(ELF)" || { echo "set ELF=<file>"; exit 2; }
 	@mkdir -p isa
 	$(CROSS)objcopy -O binary $(ELF) isa/elf.bin
 	python3 -I -c "$(HEX64)" isa/elf.bin > isa/elf.hex
-	obj_dir/Vtb +isa +hex=isa/elf.hex
+	obj_dir/Vtb +isa +hex=isa/elf.hex $(if $(RX),'+rx=$(RX)')
 
 HEX64 = import sys; b = open(sys.argv[1], 'rb').read(); b += bytes(-len(b) % 8); \
 	print('\n'.join('%016x' % int.from_bytes(b[i:i + 8], 'little') for i in range(0, len(b), 8)))

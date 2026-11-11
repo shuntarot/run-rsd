@@ -17,16 +17,22 @@
 //!
 //! `print!` goes to RSD's serial output, one character per store. The
 //! characters wait in a FIFO in the harness until the host drains it
-//! (`hio drain --text uart`). There is no input. `exit` writes tohost, which
-//! `scripts/run.sh` waits for.
+//! (`hio drain --text uart`). `getc` reads the serial input, one character
+//! at a time from the host. `exit` writes tohost. `scripts/run.sh` does the
+//! host's part of all three.
 
 #![no_std]
+
+use core::sync::atomic::{AtomicU8, Ordering};
 
 pub use riscv;
 pub use riscv_rt::entry;
 
 /// RSD's serial output. It takes the low 8 bits of a word store.
 const SERIAL: *mut u32 = 0x4000_2000 as *mut u32;
+/// The serial input: a load gives {seq, char} as the host set it, and a
+/// store of seq tells the host that the character was taken.
+const SERIAL_IN: *mut u32 = 0x4000_2004 as *mut u32;
 /// tohost, as riscv-tests use it: (status << 1) | 1 ends the program.
 const TOHOST: *mut u32 = 0x8000_1000 as *mut u32;
 
@@ -50,6 +56,23 @@ impl core::fmt::Write for Console {
         s.bytes().for_each(putc);
         Ok(())
     }
+}
+
+/// The seq of the last character taken. Both sides start from 0 at reset.
+static TAKEN: AtomicU8 = AtomicU8::new(0);
+
+/// Reads one byte the host typed, or `None`. Never blocks.
+pub fn getc() -> Option<u8> {
+    let word = unsafe { SERIAL_IN.read_volatile() };
+    let seq = (word >> 8) as u8;
+    // The same seq is the character already taken. RSD may run this load
+    // before the store below has gone out, and then sees that seq again.
+    if seq == TAKEN.load(Ordering::Relaxed) {
+        return None;
+    }
+    TAKEN.store(seq, Ordering::Relaxed);
+    unsafe { SERIAL_IN.write_volatile(u32::from(seq)) }
+    Some(word as u8)
 }
 
 /// Ends the program with `code`. `scripts/run.sh` exits with the same status.

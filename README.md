@@ -4,13 +4,25 @@ Runs the [RSD](https://github.com/shioyadan/RSD) RISC-V core (RV32IM, out of
 order, superscalar) on FPGA boards with
 [veryl-harness](https://github.com/shuntarot/uharness).
 
-RSD's address map is its own: a boot ROM at 0x1000 (the reset vector), 256 KB
-of RAM from 0x8000_0000, a timer at 0x4000_0000 and a serial output at
-0x4000_2000. Here the RAM is the board's DRAM, and the boot ROM is a few
-instructions in `rtl/rsd_top.veryl` that jump to 0x8000_0000. A program is
-linked to run from 0x8000_0000 and loaded by the host while the core is held
-in reset. What it writes to the serial output waits in a FIFO that the host
-drains.
+The host loads a program with `hio`, and the program talks to the host
+through a serial output and input.
+
+## Address map
+
+What a program sees. Each register is described in
+[doc/address.md](doc/address.md).
+
+| Address | Size | What | Here it is |
+|---|---|---|---|
+| `0x0000_1000` – `0x0000_FFFF` | 60 KB | Boot ROM; the core starts at `0x1000` | a jump to `0x8000_0000` (`rtl/rsd_top.veryl`) |
+| `0x4000_0000` – `0x4000_000F` | 16 B | Timer: `mtime`, `mtimecmp` | in the core |
+| `0x4000_2000` | 4 B | Serial output | a FIFO the host reads |
+| `0x4000_2004` | 4 B | Serial input | a register the host writes |
+| `0x8000_0000` – `0x8003_FFFF` | 256 KB | RAM, through a 4 KB write-back data cache | the board's DRAM |
+| `0x8000_1000` – `0x8000_1007` | 8 B | `tohost`, inside the RAM range but I/O | a register the host reads |
+
+Nothing else is mapped. A program runs from `0x8000_0000`. Use `lw` / `sw`
+for I/O: there are no byte enables.
 
 ## Requirements
 
@@ -36,19 +48,22 @@ memory in place of the DRAM.
 
 ## Programs in Rust
 
-`bsp/` starts a Rust program and gives it `print!` on the serial output and
-`exit`, through `tohost`. `cargo run` loads the program, prints its serial
-output until it exits, and exits with its status (`scripts/run.sh`). RSD has
-no debug module, so `hio cpu boot` and the RTT console are not available here,
-and there is no input.
+`bsp/` starts a Rust program and gives it `print!` on the serial output,
+`getc` on the serial input, and `exit`, through `tohost`. `cargo run` loads
+the program, prints its serial output and sends it what you type until it
+exits, and exits with its status (`scripts/run.sh`). Ctrl-C leaves.
 
 ```bash
 cargo run -p hello
-make -C sim elf ELF=../target/riscv32im-unknown-none-elf/debug/hello   # in Verilator
+cargo run -p console      # echoes what you type; q exits
+make -C sim elf ELF=../target/riscv32im-unknown-none-elf/debug/console RX='hi q'   # in Verilator
 ```
 
-The program is placed from 0x8000_2000, after `tohost`; the word at
-0x8000_0000 jumps there.
+RSD has no debug module, so `hio cpu boot` does not apply. Nor does the RTT
+console: the host cannot see what is in the data cache. The input is one
+character at a time, each a few round trips to the board: fast enough to type,
+not to send a file. The program is placed from 0x8000_2000, after `tohost`;
+the word at 0x8000_0000 jumps there.
 
 ## riscv-tests
 
@@ -75,7 +90,11 @@ builds it for Vivado, with these changes:
 - an 8-bit serial output, one character per store;
 - no debug register outputs;
 - `tohost` (the 8 bytes at 0x8000_1000) is an I/O address with an output
-  port (`PATCHES` in the script).
+  port;
+- a serial input at 0x4000_2004, with an input port and an output port
+  ([doc/address.md](doc/address.md)).
+
+The changes are `PATCHES` in the script.
 
 `rtl/rsd_axi.sv` puts RSD's core and its own AXI4 master behind plain ports.
 `rtl/rsd_top.veryl` adds the boot ROM and sends the rest to the DRAM.
@@ -105,11 +124,12 @@ The PYNQ-Z1's DRAM is in the PS and not counted.
 
 | | |
 |---|---|
+| `doc/address.md` | the address map, register by register |
 | `rtl/rsd_top.veryl`, `Harness.toml` | the DUT with its boot ROM, and where each port goes |
 | `rtl/rsd_axi.sv` | RSD's core and AXI4 master behind plain ports |
 | `rtl/rsd.sv`, `scripts/flatten.py` | RSD as one file, and the script that writes it |
 | `asm/`, `sim/` | the test program, and the DUT in Verilator |
-| `bsp/`, `apps/` | Rust programs: the startup, and `hello` |
+| `bsp/`, `apps/` | Rust programs: the startup, `hello` and `console` |
 | `scripts/run.sh`, `scripts/riscv-tests.sh` | a program, and riscv-tests, on the board |
 
 Put paths for your machine in `local.mk`; see `Makefile`.

@@ -24,3 +24,9 @@ ports   = { valid = "o_uart_valid", data = "o_uart_data" }
 [bundle.tohost]
 backing = "reg"
 ports   = ["o_tohost"]
+
+# The serial input at 0x4000_2004: the host sets i_rx to {seq, char} and gives
+# the next character once o_rx_ack shows that seq (scripts/run.sh).
+[bundle.rx]
+backing = "reg"
+ports   = ["i_rx", "o_rx_ack"]

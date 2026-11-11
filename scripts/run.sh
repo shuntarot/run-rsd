@@ -1,21 +1,23 @@
 #!/usr/bin/env bash
-# Runs a program on the board and prints its serial output.
+# Runs a program on the board, with its serial output and input.
 #
 #   scripts/run.sh [-t SECONDS] <elf>
 #
 # The ELF is loaded while the core is held in reset, then the core is
-# released. The serial output is printed as it comes until the program writes
-# tohost (rsd_bsp::exit), and the script exits with the program's status: 124
-# after -t seconds (default 10) without one. HIO picks another hio. This is
-# the runner of `cargo run`.
+# released. The serial output is printed as it comes, and what is typed (or
+# piped in) goes to the serial input, until the program writes tohost
+# (rsd_bsp::exit). The script then exits with the program's status. Ctrl-C
+# leaves; -t gives up after SECONDS with status 124. HIO picks another hio.
+# This is the runner of `cargo run`.
 
 set -u
+export LC_ALL=C
 
-timeout=10
+timeout=0
 while getopts "t:h" opt; do
     case $opt in
         t) timeout=$OPTARG ;;
-        *) sed -n '2,10s/^# \{0,1\}//p' "$0"; exit 2 ;;
+        *) sed -n '2,11s/^# \{0,1\}//p' "$0"; exit 2 ;;
     esac
 done
 shift $((OPTIND - 1))
@@ -34,22 +36,48 @@ drain() {
         while read -r h; do printf '%b' "\\x$h"; done
 }
 
-# The value of `o_tohost`, as `hio read` prints it.
-tohost() {
-    "$hio" read o_tohost | grep -o '0x[0-9a-f]*' | tail -1
+# A register's value, as `hio read` prints it.
+reg() {
+    "$hio" read "$1" | grep -o '0x[0-9a-f]*' | tail -1
 }
 
-printf 'reset --hold\nload mem %s\nreset --release\n' "$1" |
+# Keys go through one at a time and are not echoed here: the program echoes.
+if [ -t 0 ]; then
+    saved=$(stty -g)
+    trap 'stty "$saved"' EXIT
+    trap 'exit 130' INT
+    stty -icanon -echo
+fi
+
+# i_rx keeps its value over a reset of the core: start it from seq 0, as the
+# program does.
+printf 'reset --hold\nwrite i_rx 0\nload mem %s\nreset --release\n' "$1" |
     "$hio" run - > /dev/null || exit 1
 
+seq=0       # the seq of the last character given to the program
+pending=""  # typed, not given yet
+input=1     # stdin is open
 end=$((SECONDS + timeout))
 while :; do
-    value=$(tohost) || exit 1
+    value=$(reg o_tohost) || exit 1
     drain
     [ "${value:-0x00000000}" != 0x00000000 ] && break
-    if [ $SECONDS -ge $end ]; then
+    if [ "$timeout" != 0 ] && [ $SECONDS -ge $end ]; then
         echo "timeout: the program did not end in $timeout s" >&2
         exit 124
+    fi
+
+    if [ $input = 1 ]; then
+        while IFS= read -r -N1 -t 0.01 ch; do pending+=$ch; done
+        # 1 is the end of the input; above 128, nothing more for now.
+        [ $? -le 128 ] && input=0
+    fi
+    # The next character, once the program has taken the last one.
+    if [ -n "$pending" ] && [ $(( $(reg o_rx_ack) )) -eq $seq ]; then
+        printf -v code '%d' "'${pending:0:1}"
+        pending=${pending:1}
+        seq=$(( (seq + 1) & 0xff ))
+        "$hio" write i_rx $(( (seq << 8) | (code & 0xff) )) > /dev/null || exit 1
     fi
 done
 exit $(( value >> 1 ))
