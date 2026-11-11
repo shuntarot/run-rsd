@@ -26,7 +26,7 @@ read mem 0x2024 1
 
 echo == the serial output ==
 # The same ten words, one per line, then "done"
-drain uart
+drain --text uart
 
 echo == nothing lost ==
 read uart_drops
