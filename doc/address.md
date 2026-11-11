@@ -6,7 +6,7 @@ this repository: the serial input and `tohost` (`PATCHES` in
 
 ## Memory
 
-| Address | Size | What |
+| Address | Size | Region |
 |---|---|---|
 | `0x0000_1000` – `0x0000_FFFF` | 60 KB | Boot ROM. The core starts at `0x1000`. |
 | `0x8000_0000` – `0x8003_FFFF` | 256 KB | RAM: the board's DRAM. |

@@ -12,14 +12,14 @@ through a serial output and input.
 What a program sees. Each register is described in
 [doc/address.md](doc/address.md).
 
-| Address | Size | What | Here it is |
+| Address | Size | Region | Backed by |
 |---|---|---|---|
-| `0x0000_1000` – `0x0000_FFFF` | 60 KB | Boot ROM; the core starts at `0x1000` | a jump to `0x8000_0000` (`rtl/rsd_top.veryl`) |
-| `0x4000_0000` – `0x4000_000F` | 16 B | Timer: `mtime`, `mtimecmp` | in the core |
-| `0x4000_2000` | 4 B | Serial output | a FIFO the host reads |
-| `0x4000_2004` | 4 B | Serial input | a register the host writes |
+| `0x0000_1000` – `0x0000_FFFF` | 60 KB | Boot ROM; the core starts at `0x1000` | constants in `rtl/rsd_top.veryl` (a jump to `0x8000_0000`) |
+| `0x4000_0000` – `0x4000_000F` | 16 B | Timer: `mtime`, `mtimecmp` | registers in the core |
+| `0x4000_2000` | 4 B | Serial output | a FIFO in the harness, read by the host |
+| `0x4000_2004` | 4 B | Serial input | a register in the harness, written by the host |
 | `0x8000_0000` – `0x8003_FFFF` | 256 KB | RAM, through a 4 KB write-back data cache | the board's DRAM |
-| `0x8000_1000` – `0x8000_1007` | 8 B | `tohost`, inside the RAM range but I/O | a register the host reads |
+| `0x8000_1000` – `0x8000_1007` | 8 B | `tohost`, inside the RAM range but I/O | a register in the harness, read by the host |
 
 Nothing else is mapped. A program runs from `0x8000_0000`. Use `lw` / `sw`
 for I/O: there are no byte enables.
