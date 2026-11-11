@@ -67,11 +67,17 @@ while :; do
         exit 124
     fi
 
-    if [ $input = 1 ]; then
-        while IFS= read -r -N1 -t 0.01 ch; do pending+=$ch; done
-        # 1 is the end of the input; above 128, nothing more for now.
-        [ $? -le 128 ] && input=0
-    fi
+    while [ $input = 1 ]; do
+        IFS= read -r -N1 -t 0.01 ch
+        status=$?
+        if [ $status = 0 ]; then
+            pending+=$ch
+            continue
+        fi
+        # Above 128: nothing more for now. Otherwise the input has ended.
+        [ $status -le 128 ] && input=0
+        break
+    done
     # The next character, once the program has taken the last one.
     if [ -n "$pending" ] && [ $(( $(reg o_rx_ack) )) -eq $seq ]; then
         printf -v code '%d' "'${pending:0:1}"
