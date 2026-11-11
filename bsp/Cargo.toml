@@ -1,0 +1,11 @@
+[package]
+name        = "rsd-bsp"
+description = "Startup, serial output and exit for RSD under veryl-harness"
+
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+riscv    = "0.16.1"
+riscv-rt = { version = "0.18.0", features = ["memory"] }

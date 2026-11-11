@@ -3,8 +3,9 @@
 // clock crossing does. The serial output is printed as it comes. Veryl's own
 // simulator cannot run RSD (it is SystemVerilog), so this uses Verilator.
 //
-// With +isa, it runs a riscv-tests program instead (+hex=<file>) until it
-// writes tohost, and prints "tohost <value>"; "tohost 0" is a timeout.
+// With +isa, it runs another program instead (+hex=<file>: a riscv-tests
+// test, or firmware from apps/) until it writes tohost, and prints
+// "tohost <value>"; "tohost 0" is a timeout.
 module tb;
     logic clk = 0;
     always #5 clk = ~clk;
@@ -40,7 +41,7 @@ module tb;
     );
 
     always @(posedge clk) begin
-        if (uart_valid && !isa) begin
+        if (uart_valid) begin
             $write("%c", uart_data);
             chars <= chars + 1;
         end

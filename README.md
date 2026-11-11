@@ -19,6 +19,7 @@ drains.
 - A board with room for the core (it does not fit the Arty A7-35; see the
   table below) on USB
 - A RISC-V toolchain (`riscv64-unknown-elf-gcc`), to rebuild `asm/smoke.elf`
+- Rust (rustup), for the programs in `apps/`
 - Verilator 5, to run it without the board
 
 ## Run
@@ -32,6 +33,22 @@ hio run bringup.hio       # loads asm/smoke.elf, reads back what it wrote, drain
 
 `make sim` runs the same program on `rsd_top` in Verilator, with an AXI4
 memory in place of the DRAM.
+
+## Programs in Rust
+
+`bsp/` starts a Rust program and gives it `print!` on the serial output and
+`exit`, through `tohost`. `cargo run` loads the program, prints its serial
+output until it exits, and exits with its status (`scripts/run.sh`). RSD has
+no debug module, so `hio cpu boot` and the RTT console are not available here,
+and there is no input.
+
+```bash
+cargo run -p hello
+make -C sim elf ELF=../target/riscv32im-unknown-none-elf/debug/hello   # in Verilator
+```
+
+The program is placed from 0x8000_2000, after `tohost`; the word at
+0x8000_0000 jumps there.
 
 ## riscv-tests
 
@@ -92,7 +109,8 @@ The PYNQ-Z1's DRAM is in the PS and not counted.
 | `rtl/rsd_axi.sv` | RSD's core and AXI4 master behind plain ports |
 | `rtl/rsd.sv`, `scripts/flatten.py` | RSD as one file, and the script that writes it |
 | `asm/`, `sim/` | the test program, and the DUT in Verilator |
-| `scripts/riscv-tests.sh` | riscv-tests on the board |
+| `bsp/`, `apps/` | Rust programs: the startup, and `hello` |
+| `scripts/run.sh`, `scripts/riscv-tests.sh` | a program, and riscv-tests, on the board |
 
 Put paths for your machine in `local.mk`; see `Makefile`.
 

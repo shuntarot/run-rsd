@@ -17,5 +17,8 @@
 /sim/smoke.hex
 /sim/isa/
 
+# Rust build output
+/target/
+
 # Paths for this machine (see Makefile)
 /local.mk

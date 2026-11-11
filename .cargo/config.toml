@@ -1,0 +1,14 @@
+[build]
+target = "riscv32im-unknown-none-elf"
+
+[target.riscv32im-unknown-none-elf]
+# riscv-rt's link.x includes memory.x, which bsp/build.rs puts on the path.
+rustflags = ["-C", "link-arg=-Tlink.x"]
+# Loads the ELF while the core is held in reset, runs it, prints its serial
+# output and exits with its status. RSD has no debug module, so
+# `hio cpu boot` cannot start it.
+runner = "scripts/run.sh"
+
+[env]
+# The harness this firmware runs on (`veryl harness gen` writes it).
+HIO_REGS = { value = "hns/regs.json", relative = true }
