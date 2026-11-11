@@ -6,7 +6,8 @@ The harness reads the core through `include(inline, ...)` in a Veryl source,
 and synthesis gets no include path or macro list, so both are written into
 the file. The sources are the packages (TYPES) and modules (MODULES) of
 Processor/Src/Makefiles/CoreSources.inc.mk, less the board tops and the
-simulation memory. BasicMacros.sv goes in once, at the top.
+simulation memory. BasicMacros.sv goes in once, at the top. PATCHES below
+lists what is changed.
 
     scripts/flatten.py <RSD checkout> > rtl/rsd.sv   (or: make rsd)
 """
@@ -48,6 +49,74 @@ SKIP = {
 }
 
 
+# Changes to RSD, each applied to text that must occur exactly once.
+#
+# tohost: riscv-tests report through an 8-byte word at 0x8000_1000. The data
+# cache writes back, so the host cannot see that word in memory. These make
+# it an I/O address: a store to it goes out, in order and only once it
+# retires, as the serial output does, and the core's `tohost` output holds
+# the low word last stored there.
+PATCHES = {
+    "Memory/MemoryMapTypes.sv": [
+        ("localparam PHY_ADDR_SERIAL_OUTPUT = 20'h0_2000;\n",
+         "localparam PHY_ADDR_SERIAL_OUTPUT = 20'h0_2000;\n"
+         "localparam LOG_ADDR_TOHOST = 32'h8000_1000;\n"
+         "localparam PHY_ADDR_TOHOST = 20'h0_3000;\n"),
+        ("    if (addr == LOG_ADDR_SERIAL_OUTPUT) begin\n",
+         "    if (LOG_ADDR_TOHOST <= addr && addr < LOG_ADDR_TOHOST + 8) begin\n"
+         "        return MMT_IO;\n"
+         "    end\n"
+         "    else if (addr == LOG_ADDR_SERIAL_OUTPUT) begin\n"),
+        ("    if (logAddr == LOG_ADDR_SERIAL_OUTPUT) begin\n",
+         "    if (LOG_ADDR_TOHOST <= logAddr && logAddr < LOG_ADDR_TOHOST + 8) begin\n"
+         "        phyAddr.isIO = TRUE;\n"
+         "        phyAddr.addr = PHY_ADDR_TOHOST + logAddr[2:0];\n"
+         "    end\n"
+         "    else if (logAddr == LOG_ADDR_SERIAL_OUTPUT) begin\n"),
+    ],
+    "IO/IO_UnitIF.sv": [
+        ("    PhyAddrPath ioReadAddrIn;\n",
+         "    PhyAddrPath ioReadAddrIn;\n"
+         "\n"
+         "    // The low word last stored to tohost\n"
+         "    DataPath tohost;\n"),
+        ("        serialWE,\n        serialWriteDataOut\n    );\n",
+         "        serialWE,\n        serialWriteDataOut,\n        tohost\n    );\n"),
+    ],
+    "IO/IO_Unit.sv": [
+        ("    TimerRegsters tmNext;\n",
+         "    TimerRegsters tmNext;\n"
+         "\n"
+         "    // tohost: the low word last stored there\n"
+         "    DataPath tohostReg;\n"
+         "    always_ff@(posedge port.clk) begin\n"
+         "        if (port.rst) begin\n"
+         "            tohostReg <= '0;\n"
+         "        end\n"
+         "        else if (port.ioWE && port.ioWriteAddrIn.addr == PHY_ADDR_TOHOST) begin\n"
+         "            tohostReg <= port.ioWriteDataIn;\n"
+         "        end\n"
+         "    end\n"
+         "    assign port.tohost = tohostReg;\n"),
+        ("        // Read a timer rigister\n        if (phyRawReadAddr == PHY_ADDR_TIMER_LOW) begin\n",
+         "        // Read a timer rigister\n"
+         "        if (phyRawReadAddr == PHY_ADDR_TOHOST) begin\n"
+         "            port.ioReadDataOut = tohostReg;\n"
+         "        end\n"
+         "        else if (phyRawReadAddr == PHY_ADDR_TOHOST + 4) begin\n"
+         "            port.ioReadDataOut = '0;\n"
+         "        end\n"
+         "        else if (phyRawReadAddr == PHY_ADDR_TIMER_LOW) begin\n"),
+    ],
+    "Core.sv": [
+        ("    SerialDataPath serialWriteData\n);\n",
+         "    SerialDataPath serialWriteData,\n    DataPath tohost\n);\n"),
+        ("    IO_UnitIF ioUnitIF(clk, rst, rstStart, serialWE, serialWriteData);\n",
+         "    IO_UnitIF ioUnitIF(clk, rst, rstStart, serialWE, serialWriteData);\n"
+         "    assign tohost = ioUnitIF.tohost;\n"),
+    ],
+}
+
 def make_list(mk, name):
     """The files of `NAME = \\` in a Makefile, up to the first line without
     a trailing backslash."""
@@ -63,8 +132,17 @@ def make_list(mk, name):
     return files
 
 
+def patch(path, src):
+    text = path.read_text()
+    for old, new in PATCHES.get(str(path.relative_to(src)), []):
+        if text.count(old) != 1:
+            sys.exit(f"{path}: a patch does not apply: {old.splitlines()[0].strip()}")
+        text = text.replace(old, new)
+    return text
+
+
 def expand(path, src, out):
-    for line in path.read_text().splitlines():
+    for line in patch(path, src).splitlines():
         m = INCLUDE.match(line)
         if m and m.group(1) == "BasicMacros.sv":
             continue
@@ -93,7 +171,8 @@ def main():
     if dirty:
         sys.exit(f"{root}: Processor/Src has local changes:\n{dirty}")
 
-    out = [f"// RSD ({rev}), Processor/Src with every `include expanded.",
+    out = [f"// RSD ({rev}), Processor/Src with every `include expanded, and",
+           "// patched for tohost (PATCHES in the script).",
            "// Written by scripts/flatten.py. Do not edit.",
            "// Copyright 2019- RSD contributors. Apache License 2.0 (LICENSE.RSD)."]
     out += [f"`define {k} {v}".rstrip() for k, v in DEFINES]

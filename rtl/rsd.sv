@@ -1,4 +1,5 @@
-// RSD (1d7415b), Processor/Src with every `include expanded.
+// RSD (1d7415b), Processor/Src with every `include expanded, and
+// patched for tohost (PATCHES in the script).
 // Written by scripts/flatten.py. Do not edit.
 // Copyright 2019- RSD contributors. Apache License 2.0 (LICENSE.RSD).
 `define RSD_SYNTHESIS
@@ -419,6 +420,8 @@ localparam PHY_ADDR_SECTION_1_BASE = 20'h1_0000;
 //
 localparam LOG_ADDR_SERIAL_OUTPUT = 32'h4000_2000;
 localparam PHY_ADDR_SERIAL_OUTPUT = 20'h0_2000;
+localparam LOG_ADDR_TOHOST = 32'h8000_1000;
+localparam PHY_ADDR_TOHOST = 20'h0_3000;
 
 
 //
@@ -450,7 +453,10 @@ localparam PHY_ADDR_TIMER_ZONE_BIT_WIDTH = 4;
 // 論理アドレスからメモリタイプを得る
 function automatic MemoryMapType GetMemoryMapType(AddrPath addr);
     // TODO: アドレス変換を真面目に実装する
-    if (addr == LOG_ADDR_SERIAL_OUTPUT) begin
+    if (LOG_ADDR_TOHOST <= addr && addr < LOG_ADDR_TOHOST + 8) begin
+        return MMT_IO;
+    end
+    else if (addr == LOG_ADDR_SERIAL_OUTPUT) begin
         return MMT_IO;
     end
     else if (LOG_ADDR_TIMER_BEGIN <= addr && addr < LOG_ADDR_TIMER_END) begin
@@ -471,7 +477,11 @@ endfunction
 function automatic PhyAddrPath ToPhyAddrFromLogical(AddrPath logAddr);
     PhyAddrPath phyAddr;
 
-    if (logAddr == LOG_ADDR_SERIAL_OUTPUT) begin
+    if (LOG_ADDR_TOHOST <= logAddr && logAddr < LOG_ADDR_TOHOST + 8) begin
+        phyAddr.isIO = TRUE;
+        phyAddr.addr = PHY_ADDR_TOHOST + logAddr[2:0];
+    end
+    else if (logAddr == LOG_ADDR_SERIAL_OUTPUT) begin
         phyAddr.isIO = TRUE;
         phyAddr.addr = PHY_ADDR_SERIAL_OUTPUT;
     end
@@ -3823,7 +3833,8 @@ output
     logic memAccessRE,
     logic memAccessWE,
     logic serialWE,
-    SerialDataPath serialWriteData
+    SerialDataPath serialWriteData,
+    DataPath tohost
 );
     //
     // --- For Debug
@@ -3892,6 +3903,7 @@ output
     RecoveryManagerIF recoveryManagerIF( clk, rst );
     CSR_UnitIF csrUnitIF(clk, rst, rstStart);
     IO_UnitIF ioUnitIF(clk, rst, rstStart, serialWE, serialWriteData);
+    assign tohost = ioUnitIF.tohost;
     MulDivUnitIF mulDivUnitIF(clk, rst);
 
     //
@@ -24724,6 +24736,18 @@ module IO_Unit(
     // Timer register
     TimerRegsters tmReg;
     TimerRegsters tmNext;
+
+    // tohost: the low word last stored there
+    DataPath tohostReg;
+    always_ff@(posedge port.clk) begin
+        if (port.rst) begin
+            tohostReg <= '0;
+        end
+        else if (port.ioWE && port.ioWriteAddrIn.addr == PHY_ADDR_TOHOST) begin
+            tohostReg <= port.ioWriteDataIn;
+        end
+    end
+    assign port.tohost = tohostReg;
     always_ff@(posedge port.clk) begin
         if (port.rst) begin
             tmReg <= '0;
@@ -24768,7 +24792,13 @@ module IO_Unit(
         end
 
         // Read a timer rigister
-        if (phyRawReadAddr == PHY_ADDR_TIMER_LOW) begin
+        if (phyRawReadAddr == PHY_ADDR_TOHOST) begin
+            port.ioReadDataOut = tohostReg;
+        end
+        else if (phyRawReadAddr == PHY_ADDR_TOHOST + 4) begin
+            port.ioReadDataOut = '0;
+        end
+        else if (phyRawReadAddr == PHY_ADDR_TIMER_LOW) begin
             port.ioReadDataOut = tmReg.mtime.split.low;
         end
         else if (phyRawReadAddr == PHY_ADDR_TIMER_HI) begin
@@ -24824,6 +24854,9 @@ interface IO_UnitIF(
     DataPath ioReadDataOut;
     PhyAddrPath ioReadAddrIn;
 
+    // The low word last stored to tohost
+    DataPath tohost;
+
     modport IO_Unit(
     input 
         clk, rst, rstStart,
@@ -24834,7 +24867,8 @@ interface IO_UnitIF(
     output
         ioReadDataOut,
         serialWE,
-        serialWriteDataOut
+        serialWriteDataOut,
+        tohost
     );
 
     modport MemoryAccessStage(

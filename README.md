@@ -33,6 +33,22 @@ hio run bringup.hio       # loads asm/smoke.elf, reads back what it wrote, drain
 `make sim` runs the same program on `rsd_top` in Verilator, with an AXI4
 memory in place of the DRAM.
 
+## riscv-tests
+
+The tests report through `tohost` at 0x8000_1000. Here that word is an I/O
+address, so a store to it leaves the core at once, and `o_tohost` shows the
+last value (a register in the harness).
+
+```bash
+scripts/riscv-tests.sh <riscv-tests>/share/riscv-tests/isa    # on the board
+make -C sim isa ISA=<riscv-tests>/share/riscv-tests/isa      # in Verilator
+```
+
+Both pass rv32um-p (8/8) and all of rv32ui-p but `fence_i` and `ma_data`:
+RSD's `fence.i` does not make stores visible to fetches, and RSD has no
+misaligned loads or stores. `rv32ui-p-ld_st` is linked with `tohost` at
+0x8000_2000 and is skipped.
+
 ## The core
 
 `rtl/rsd.sv` is RSD's `Processor/Src` as one file, written by
@@ -40,14 +56,17 @@ memory in place of the DRAM.
 builds it for Vivado, with these changes:
 
 - an 8-bit serial output, one character per store;
-- no debug register outputs.
+- no debug register outputs;
+- `tohost` (the 8 bytes at 0x8000_1000) is an I/O address with an output
+  port (`PATCHES` in the script).
 
 `rtl/rsd_axi.sv` puts RSD's core and its own AXI4 master behind plain ports.
 `rtl/rsd_top.veryl` adds the boot ROM and sends the rest to the DRAM.
 
 RSD's data cache writes back and has no flush. The host sees a store in the
 DRAM only once the line has been pushed out of the 4 KB cache;
-`asm/smoke.S` reads 8 KB elsewhere to do that.
+`asm/smoke.S` reads 8 KB elsewhere to do that. Stores to I/O addresses (the
+serial output, `tohost`) do not wait in the cache.
 
 ## Size
 
@@ -73,6 +92,7 @@ The PYNQ-Z1's DRAM is in the PS and not counted.
 | `rtl/rsd_axi.sv` | RSD's core and AXI4 master behind plain ports |
 | `rtl/rsd.sv`, `scripts/flatten.py` | RSD as one file, and the script that writes it |
 | `asm/`, `sim/` | the test program, and the DUT in Verilator |
+| `scripts/riscv-tests.sh` | riscv-tests on the board |
 
 Put paths for your machine in `local.mk`; see `Makefile`.
 

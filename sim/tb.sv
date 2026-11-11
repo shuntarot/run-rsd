@@ -2,6 +2,9 @@
 // whose channels stall for a varying number of cycles, the way DRAM behind a
 // clock crossing does. The serial output is printed as it comes. Veryl's own
 // simulator cannot run RSD (it is SystemVerilog), so this uses Verilator.
+//
+// With +isa, it runs a riscv-tests program instead (+hex=<file>) until it
+// writes tohost, and prints "tohost <value>"; "tohost 0" is a timeout.
 module tb;
     logic clk = 0;
     always #5 clk = ~clk;
@@ -20,6 +23,11 @@ module tb;
     integer      oor = 0, bad = 0, i, chars = 0;
     logic        uart_valid;
     logic [7:0]  uart_data;
+    logic [31:0] tohost;
+    logic        isa = 0;
+    string       hex = "smoke.hex";
+    // riscv-tests runs, in cycles: RSD's reset takes 10000 of them.
+    localparam int ISA_END = 200000;
 
     assign rst_n = cycle >= 5;
 
@@ -27,12 +35,12 @@ module tb;
 
     run_rsd_rsd_top dut (
         .i_clk(clk), .i_rst(rst_n),
-        .o_uart_valid(uart_valid), .o_uart_data(uart_data),
+        .o_uart_valid(uart_valid), .o_uart_data(uart_data), .o_tohost(tohost),
         .mem(axi.master)
     );
 
     always @(posedge clk) begin
-        if (uart_valid) begin
+        if (uart_valid && !isa) begin
             $write("%c", uart_data);
             chars <= chars + 1;
         end
@@ -127,9 +135,11 @@ module tb;
 
     initial begin
         for (i = 0; i < WORDS; i = i + 1) mem[i] = 0;
-        $readmemh("smoke.hex", mem);
+        isa = $test$plusargs("isa");
+        void'($value$plusargs("hex=%s", hex));
+        $readmemh(hex, mem);
 
-        // What asm/smoke.S writes at 0x8000_1000, word by word. misa and
+        // What asm/smoke.S writes at 0x8000_2000, word by word. misa and
         // mhartid (+0x04, +0x08) are only printed.
         want[0] = 32'h21534e48; want[1] = 32'h0;        want[2] = 32'h0;
         want[3] = 32'hc0ffee42; want[4] = 32'h000f45f6; want[5] = 32'h44332211;
@@ -144,12 +154,17 @@ module tb;
 
     always @(posedge clk) begin
         cycle <= cycle + 1;
-        if (cycle == END) begin
+        if (isa) begin
+            if (tohost != 0 || cycle == ISA_END) begin
+                $display("tohost %0d", tohost);
+                $finish;
+            end
+        end else if (cycle == END) begin
             for (i = 0; i < 10; i = i + 1) begin
-                if (i == 1 || i == 2 || word(32'h1000 + i * 4) == want[i]) begin
-                    $display("+%h %h", 8'(i * 4), word(32'h1000 + i * 4));
+                if (i == 1 || i == 2 || word(32'h2000 + i * 4) == want[i]) begin
+                    $display("+%h %h", 8'(i * 4), word(32'h2000 + i * 4));
                 end else begin
-                    $display("+%h %h  <- want %h", 8'(i * 4), word(32'h1000 + i * 4), want[i]);
+                    $display("+%h %h  <- want %h", 8'(i * 4), word(32'h2000 + i * 4), want[i]);
                     bad = bad + 1;
                 end
             end
@@ -162,6 +177,8 @@ module tb;
                 $display("%0d accesses out of range", oor);
                 bad = bad + 1;
             end
+            $display("tohost %h", tohost);
+            if (tohost != 1) bad = bad + 1;
             if (bad == 0) $display("PASS");
             else $display("FAIL");
             $finish;

@@ -1,7 +1,7 @@
 # rsd -- hio run bringup.hio
 #
 # Hold the core in reset, put asm/smoke.elf in RAM, release it, and read what
-# it wrote at 0x8000_1000 and printed on the serial output.
+# it wrote at 0x8000_2000, printed on the serial output and stored to tohost.
 
 echo == identity ==
 id
@@ -9,20 +9,20 @@ id
 echo == load the program while the core is held ==
 reset --hold
 load mem asm/smoke.elf --verify
-write mem 0x1000 0 0 0 0 0 0 0 0 0 0
+write mem 0x2000 0 0 0 0 0 0 0 0 0 0
 reset --release
 sleep 100
 
 echo == what the core wrote ==
 # 0x21534e48 ("HNS!"), misa 0 (RSD does not implement it), mhartid 0
-read mem 0x1000 3
+read mem 0x2000 3
 # 0xc0ffee42 (loaded from .rodata), 0x000f45f6 (mul/divu), 0x44332211 (byte stores)
-read mem 0x100c 3
+read mem 0x200c 3
 # 0x66665555 (halfword stores), 0x12345678 (a store read back by the very
 # next load), 0x80000007 (mcause of the timer interrupt)
-read mem 0x1018 3
+read mem 0x2018 3
 # 0x600d600d: written last
-read mem 0x1024 1
+read mem 0x2024 1
 
 echo == the serial output ==
 # The same ten words, one per line, then "done"
@@ -30,3 +30,7 @@ drain uart
 
 echo == nothing lost ==
 read uart_drops
+
+echo == tohost ==
+# 1: the program got to its end
+read o_tohost

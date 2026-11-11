@@ -64,7 +64,10 @@ module rsd_axi_core (
 
     // A byte the program stored to 0x4000_2000
     output logic        serial_we,
-    output logic [7:0]  serial_data
+    output logic [7:0]  serial_data,
+
+    // The low word the program last stored to tohost (0x8000_1000)
+    output logic [31:0] tohost
 );
     import BasicTypes::*;
     import CacheSystemTypes::*;
@@ -140,6 +143,7 @@ module rsd_axi_core (
         .memAccessResponse (memAccessResponse),
         .serialWE          (serial_we),
         .serialWriteData   (serial_data),
+        .tohost            (tohost),
         .lastCommittedPC   (lastCommittedPC),
         .debugRegister     (debugRegister)
     );

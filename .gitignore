@@ -15,6 +15,7 @@
 /sim/obj_dir/
 /sim/smoke.bin
 /sim/smoke.hex
+/sim/isa/
 
 # Paths for this machine (see Makefile)
 /local.mk

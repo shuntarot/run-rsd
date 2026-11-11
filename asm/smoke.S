@@ -1,6 +1,6 @@
 // Smoke test for RSD on the FPGA harness.
 // It runs from RAM at 0x8000_0000 (the boot ROM jumps there) and writes its
-// results at 0x8000_1000:
+// results at 0x8000_2000:
 //   +0x00: 0x21534e48 ("HNS!")
 //   +0x04: misa
 //   +0x08: mhartid
@@ -13,8 +13,10 @@
 //   +0x24: 0x600d600d, written last
 // The data cache writes back, so the program then reads 8 KB elsewhere, twice
 // the size of the cache, to push the results out to memory. It also prints
-// them on the serial output, one word per line, and then "done".
-#define RESULT 0x80001000
+// them on the serial output, one word per line, then "done", and last
+// writes 1 to tohost (0x8000_1000), which this RSD sends out as I/O.
+#define RESULT 0x80002000
+#define TOHOST 0x80001000
 #define SWEEP  0x80020000
 #define TIMER  0x40000000
 #define SERIAL 0x40002000
@@ -98,6 +100,10 @@ _start:
   bne  s0, s1, 3b
   la   a0, done
   call puts
+  li   t1, TOHOST
+  li   t2, 1
+  sw   t2, 0(t1)
+  sw   zero, 4(t1)
 4:
   j    4b
 
