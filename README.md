@@ -111,11 +111,12 @@ is the DUT alone; the design adds the harness and the memory behind it.
 
 | Target | Clock | Core LUT / FF / BRAM / DSP | Design LUT / FF / BRAM / DSP |
 |---|---|---|---|
-| `digilent/arty-a7-100` | 40 MHz | 15,659 / 7,760 / 10 / 4 | 22,930 / 15,352 / 10 / 4 |
-| `digilent/pynq-z1` | 40 MHz | 15,667 / 7,760 / 10 / 4 | 17,364 / 10,651 / 10 / 4 |
-| `xilinx/vcu118` | 40 MHz | 15,214 / 7,796 / 9 / 4 | 35,194 / 31,932 / 34.5 / 7 |
+| `digilent/arty-a7-100` | 40 MHz | 15,612 / 7,818 / 10 / 4 | 22,154 / 13,372 / 10 / 4 |
+| `digilent/pynq-z1` | 40 MHz | 15,640 / 7,816 / 10 / 4 | 16,630 / 8,671 / 10 / 4 |
+| `xilinx/vcu118` | 40 MHz | 15,252 / 7,879 / 9 / 4 | 34,480 / 29,978 / 34.5 / 7 |
 
-The Arty A7-35 has 20,800 LUTs; the design needs about 23,900 there. The
+The Arty A7-35 has 20,800 LUTs, fewer than the design needs (22,154 on the
+A7-100). The
 PYNQ-Z1 misses 50 MHz by a little inside the core, so the clock is 40 MHz.
 
 The PYNQ-Z1's DRAM is in the PS and not counted.
