@@ -1,0 +1,20 @@
+[dut]
+module = "rsd_top"
+
+[clock.i_clk]
+freq_mhz = 40
+
+# RSD's 256 KB of RAM at 0x8000_0000, on the board's DRAM. `hio cpu boot`
+# loads each segment by the core's addresses, and `dut_base` is how it knows.
+[bundle.mem]
+backing  = "dram"
+aperture = "64K"
+depth    = "32K"
+dut_base = 0x8000_0000
+ports    = ["mem"]
+
+# What the program writes to 0x4000_2000. The core cannot wait, so a byte
+# that finds the FIFO full is dropped and counted in uart_drops.
+[bundle.uart]
+backing = "host_poll_fifo"
+ports   = { valid = "o_uart_valid", data = "o_uart_data" }

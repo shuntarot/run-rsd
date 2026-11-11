@@ -1,0 +1,14 @@
+[project]
+name    = "run_rsd"
+version = "0.1.0"
+
+[build]
+sources = ["rtl"]
+
+[dependencies]
+hns = { git = "https://github.com/shuntarot/uharness", project = "hns", version = "0.13.1" }
+
+[lint.portability]
+# hns::mem writes its array from both ports, the form Vivado infers a
+# true dual port BRAM from. Veryl asks the user of hns to accept that.
+allow_in_dependencies = ["multiple_assign"]

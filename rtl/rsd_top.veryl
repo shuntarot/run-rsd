@@ -1,0 +1,380 @@
+// RSD, flattened by scripts/flatten.py
+include (inline, "rsd.sv");
+
+// RSD's core and AXI4 master behind plain ports
+include (inline, "rsd_axi.sv");
+
+/// Runs RSD (RV32IM, out of order) from a boot ROM and the board's DRAM.
+///
+/// RSD's address map is its own (MemoryMapTypes.sv): 64 KB from 0x0000_0000,
+/// with the reset vector at 0x1000, 256 KB of RAM from 0x8000_0000, a timer at
+/// 0x4000_0000 and a serial output at 0x4000_2000. The timer is inside the
+/// core.
+///
+/// - The RAM goes to the AXI4 port `mem` at the core's own addresses, so
+///   `dut_base = 0x8000_0000` places it.
+/// - Everything else is answered here. The 64 KB from 0 hold a boot ROM: it
+///   sets `mtvec` to a loop and jumps to 0x8000_0000. Other reads return 0
+///   and writes are dropped. A load from the timer also sends a read of its
+///   line here, with RSD's I/O flag in the address, and that read is one of
+///   them.
+/// - Each byte the program stores to 0x4000_2000 comes out on `o_uart_*`, for
+///   one cycle. The core cannot be made to wait for it.
+///
+/// RSD moves whole 8-byte cache lines: every AXI4 transfer is one 64-bit
+/// beat. The boot ROM relies on that. RSD's IDs are 2 bits; the port carries
+/// 6, as the PYNQ-Z1's PS port does, since a 64-bit port must match its ID
+/// width there.
+module rsd_top (
+    i_clk: input clock,
+    i_rst: input reset,
+
+    o_uart_valid: output logic   ,
+    o_uart_data : output logic<8>,
+
+    mem: modport $std::axi4_if::<$std::axi4_pkg::<32, 8, 6, 1, 1, 1, 1, 1>>::master,
+) {
+    // RSD's AXI4 addresses are its physical addresses above this base. The
+    // physical addresses below RAM_PHY are the 64 KB from 0; the 256 KB of
+    // RAM follow.
+    const AXI_BASE : bit<32> = 32'h1000_0000;
+    const RAM_PHY  : bit<32> = 32'h0001_0000;
+    const RAM_BYTES: bit<32> = 32'h0004_0000;
+    const RAM_BASE : bit<32> = 32'h8000_0000;
+
+    alias package axi = $std::axi4_pkg::<32, 8, 6, 1, 1, 1, 1, 1>;
+
+    var rst_trigger: logic;
+
+    always_ff {
+        if_reset {
+            rst_trigger = 1;
+        } else {
+            rst_trigger = 0;
+        }
+    }
+
+    // The core's AXI4 port
+    var c_awid   : logic<1> ;
+    var c_awaddr : logic<32>;
+    var c_awlen  : logic<8> ;
+    var c_awsize : axi::size_t ;
+    var c_awburst: axi::burst_t;
+    var c_awlock : logic    ;
+    var c_awcache: logic<4> ;
+    var c_awprot : logic<3> ;
+    var c_awqos  : logic<4> ;
+    var c_awvalid: logic    ;
+    var c_awready: logic    ;
+    var c_wdata  : logic<64>;
+    var c_wstrb  : logic<8> ;
+    var c_wlast  : logic    ;
+    var c_wvalid : logic    ;
+    var c_wready : logic    ;
+    var c_bid    : logic<1> ;
+    var c_bresp  : logic<2> ;
+    var c_bvalid : logic    ;
+    var c_bready : logic    ;
+    var c_arid   : logic<2> ;
+    var c_araddr : logic<32>;
+    var c_arlen  : logic<8> ;
+    var c_arsize : axi::size_t ;
+    var c_arburst: axi::burst_t;
+    var c_arlock : logic    ;
+    var c_arcache: logic<4> ;
+    var c_arprot : logic<3> ;
+    var c_arqos  : logic<4> ;
+    var c_arvalid: logic    ;
+    var c_arready: logic    ;
+    var c_rid    : logic<2> ;
+    var c_rdata  : logic<64>;
+    var c_rresp  : logic<2> ;
+    var c_rlast  : logic    ;
+    var c_rvalid : logic    ;
+    var c_rready : logic    ;
+
+    inst u_core: $sv::rsd_axi_core (
+        clk        : i_clk       ,
+        rst_trigger              ,
+        awid       : c_awid      ,
+        awaddr     : c_awaddr    ,
+        awlen      : c_awlen     ,
+        awsize     : c_awsize    ,
+        awburst    : c_awburst   ,
+        awlock     : c_awlock    ,
+        awcache    : c_awcache   ,
+        awprot     : c_awprot    ,
+        awqos      : c_awqos     ,
+        awvalid    : c_awvalid   ,
+        awready    : c_awready   ,
+        wdata      : c_wdata     ,
+        wstrb      : c_wstrb     ,
+        wlast      : c_wlast     ,
+        wvalid     : c_wvalid    ,
+        wready     : c_wready    ,
+        bid        : c_bid       ,
+        bresp      : c_bresp     ,
+        bvalid     : c_bvalid    ,
+        bready     : c_bready    ,
+        arid       : c_arid      ,
+        araddr     : c_araddr    ,
+        arlen      : c_arlen     ,
+        arsize     : c_arsize    ,
+        arburst    : c_arburst   ,
+        arlock     : c_arlock    ,
+        arcache    : c_arcache   ,
+        arprot     : c_arprot    ,
+        arqos      : c_arqos     ,
+        arvalid    : c_arvalid   ,
+        arready    : c_arready   ,
+        rid        : c_rid       ,
+        rdata      : c_rdata     ,
+        rresp      : c_rresp     ,
+        rlast      : c_rlast     ,
+        rvalid     : c_rvalid    ,
+        rready     : c_rready    ,
+        serial_we  : o_uart_valid,
+        serial_data: o_uart_data ,
+    );
+
+    /// The boot ROM: the 8-byte line at physical address `addr`.
+    ///
+    /// ```
+    /// 0x1000  lui   t0, 0x1
+    /// 0x1004  addi  t0, t0, 0x14
+    /// 0x1008  csrw  mtvec, t0      # a trap stops at 0x1014
+    /// 0x100c  lui   t0, 0x80000
+    /// 0x1010  jr    t0
+    /// 0x1014  j     .
+    /// ```
+    function rom (
+        addr: input logic<32>,
+    ) -> logic<64> {
+        case addr[31:3] {
+            29'h200: return 64'h0142_8293_0000_12b7;
+            29'h201: return 64'h8000_02b7_3052_9073;
+            29'h202: return 64'h0000_006f_0002_8067;
+            default: return 0;
+        }
+    }
+
+    // Whether an AXI4 address is not in the RAM, and answered here
+    function is_local (
+        addr: input logic<32>,
+    ) -> logic {
+        return addr - AXI_BASE - RAM_PHY >= RAM_BYTES;
+    }
+
+    function ram_addr (
+        addr: input logic<32>,
+    ) -> logic<32> {
+        return addr - AXI_BASE - RAM_PHY + RAM_BASE;
+    }
+
+    // Signals of the AXI4 port that the core does not have
+    always_comb {
+        mem.awregion = 0;
+        mem.awuser   = 0;
+        mem.wuser    = 0;
+        mem.arregion = 0;
+        mem.aruser   = 0;
+    }
+
+    // AR and AW are taken into a register before they go on, so that ready
+    // does not depend on the address: RSD chooses the address from ready.
+
+    // Reads. A read answered here comes the next cycle and takes the R
+    // channel before the DRAM's.
+    var arq_valid : logic       ;
+    var arq_id    : logic<2>    ;
+    var arq_addr  : logic<32>   ;
+    var arq_len   : logic<8>    ;
+    var arq_size  : axi::size_t ;
+    var arq_burst : axi::burst_t;
+    var arq_lock  : logic       ;
+    var arq_cache : logic<4>    ;
+    var arq_prot  : logic<3>    ;
+    var arq_qos   : logic<4>    ;
+    var ar_local    : logic       ;
+    var local_take  : logic       ;
+    var local_rvalid: logic       ;
+    var local_rid   : logic<2>    ;
+    var local_rdata : logic<64>   ;
+
+    always_comb {
+        c_arready = !arq_valid;
+        ar_local    = is_local(arq_addr);
+        local_take  = arq_valid && ar_local && !local_rvalid;
+
+        mem.arvalid = arq_valid && !ar_local;
+        mem.arid    = {4'b0, arq_id};
+        mem.araddr  = ram_addr(arq_addr);
+        mem.arlen   = arq_len;
+        mem.arsize  = arq_size;
+        mem.arburst = arq_burst;
+        mem.arlock  = arq_lock;
+        mem.arcache = arq_cache;
+        mem.arprot  = arq_prot;
+        mem.arqos   = arq_qos;
+
+        c_rvalid   = local_rvalid || mem.rvalid;
+        c_rid      = if local_rvalid ? local_rid : mem.rid[1:0];
+        c_rdata    = if local_rvalid ? local_rdata : mem.rdata;
+        c_rresp    = if local_rvalid ? 2'b00 : mem.rresp;
+        c_rlast    = local_rvalid || mem.rlast;
+        mem.rready = c_rready && !local_rvalid;
+    }
+
+    always_ff {
+        if_reset {
+            arq_valid  = 0;
+            arq_id     = 0;
+            arq_addr   = 0;
+            arq_len    = 0;
+            arq_size   = 0 as axi::size_t;
+            arq_burst  = 0 as axi::burst_t;
+            arq_lock   = 0;
+            arq_cache  = 0;
+            arq_prot   = 0;
+            arq_qos    = 0;
+            local_rvalid = 0;
+            local_rid    = 0;
+            local_rdata  = 0;
+        } else {
+            if c_arvalid && c_arready {
+                arq_valid = 1;
+                arq_id    = c_arid;
+                arq_addr  = c_araddr;
+                arq_len   = c_arlen;
+                arq_size  = c_arsize;
+                arq_burst = c_arburst;
+                arq_lock  = c_arlock;
+                arq_cache = c_arcache;
+                arq_prot  = c_arprot;
+                arq_qos   = c_arqos;
+            } else if (mem.arvalid && mem.arready) || local_take {
+                arq_valid = 0;
+            }
+
+            if local_rvalid {
+                if c_rready {
+                    local_rvalid = 0;
+                }
+            } else if local_take {
+                local_rvalid = 1;
+                local_rid    = arq_id;
+                local_rdata  = rom(arq_addr - AXI_BASE);
+            }
+        }
+    }
+
+    // Writes. W carries no ID, so where each write goes is kept in order of
+    // its AW, and its W follows. RSD has at most two writes outstanding, and
+    // gives W only after AW is taken. A write outside the RAM is dropped and
+    // answered OKAY.
+    var awq_valid: logic       ;
+    var awq_id   : logic<1>    ;
+    var awq_addr : logic<32>   ;
+    var awq_len  : logic<8>    ;
+    var awq_size : axi::size_t ;
+    var awq_burst: axi::burst_t;
+    var awq_lock : logic       ;
+    var awq_cache: logic<4>    ;
+    var awq_prot : logic<3>    ;
+    var awq_qos  : logic<4>    ;
+    var aw_push  : logic       ;
+
+    var wq_local  : logic<2>;
+    var wq_id   : logic<2>;
+    var wq_head : logic   ;
+    var wq_tail : logic   ;
+    var wq_count: logic<2>;
+    var w_pop   : logic   ;
+    var w_local: logic   ;
+
+    var local_bvalid: logic   ;
+    var local_bid   : logic<1>;
+
+    always_comb {
+        c_awready = !awq_valid && wq_count != 2;
+        aw_push   = c_awvalid && c_awready;
+
+        mem.awvalid = awq_valid && !is_local(awq_addr);
+        mem.awid    = {5'b0, awq_id};
+        mem.awaddr  = ram_addr(awq_addr);
+        mem.awlen   = awq_len;
+        mem.awsize  = awq_size;
+        mem.awburst = awq_burst;
+        mem.awlock  = awq_lock;
+        mem.awcache = awq_cache;
+        mem.awprot  = awq_prot;
+        mem.awqos   = awq_qos;
+
+        w_local   = wq_local[wq_head];
+        mem.wvalid = c_wvalid && wq_count != 0 && !w_local;
+        mem.wdata  = c_wdata;
+        mem.wstrb  = c_wstrb;
+        mem.wlast  = c_wlast;
+        c_wready   = wq_count != 0 && (if w_local ? !local_bvalid : mem.wready);
+        w_pop      = c_wvalid && c_wready && c_wlast;
+
+        c_bvalid   = local_bvalid || mem.bvalid;
+        c_bid      = if local_bvalid ? local_bid : mem.bid[0];
+        c_bresp    = if local_bvalid ? 2'b00 : mem.bresp;
+        mem.bready = c_bready && !local_bvalid;
+    }
+
+    always_ff {
+        if_reset {
+            awq_valid  = 0;
+            awq_id     = 0;
+            awq_addr   = 0;
+            awq_len    = 0;
+            awq_size   = 0 as axi::size_t;
+            awq_burst  = 0 as axi::burst_t;
+            awq_lock   = 0;
+            awq_cache  = 0;
+            awq_prot   = 0;
+            awq_qos    = 0;
+            wq_local     = 0;
+            wq_id      = 0;
+            wq_head    = 0;
+            wq_tail    = 0;
+            wq_count   = 0;
+            local_bvalid = 0;
+            local_bid    = 0;
+        } else {
+            if aw_push {
+                awq_valid = 1;
+                awq_id    = c_awid;
+                awq_addr  = c_awaddr;
+                awq_len   = c_awlen;
+                awq_size  = c_awsize;
+                awq_burst = c_awburst;
+                awq_lock  = c_awlock;
+                awq_cache = c_awcache;
+                awq_prot  = c_awprot;
+                awq_qos   = c_awqos;
+            } else if (mem.awvalid && mem.awready) || (awq_valid && is_local(awq_addr)) {
+                awq_valid = 0;
+            }
+
+            if aw_push {
+                wq_local[wq_tail] = is_local(c_awaddr);
+                wq_id[wq_tail]  = c_awid;
+                wq_tail         = ~wq_tail;
+            }
+            if w_pop {
+                wq_head = ~wq_head;
+            }
+            wq_count = wq_count + aw_push - w_pop;
+
+            if local_bvalid && c_bready {
+                local_bvalid = 0;
+            } else if w_pop && w_local {
+                local_bvalid = 1;
+                local_bid    = wq_id[wq_head];
+            }
+        }
+    }
+}
